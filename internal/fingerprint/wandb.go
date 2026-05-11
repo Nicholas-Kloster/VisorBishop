@@ -104,16 +104,26 @@ func (p WandbProber) Probe(ctx context.Context, client *http.Client, target, hos
 				if jerr := json.Unmarshal(buf[:n], &gqlResp); jerr == nil {
 					f.Confirmed = true
 					if gqlResp.Data.Viewer == nil {
-						// 200 with null viewer = unauth and instance allows
-						// the query but reveals no identity. Still confirms
-						// platform; auth state is open at the GraphQL layer.
-						f.Auth = AuthOpen
-						f.Severity = SevHigh
-						indicators["graphql_unauth_anonymous_viewer"] = true
+						// 200 with null viewer is the default response shape
+						// for ANY W&B server (production or self-host) — the
+						// resolver returns null when no auth context is
+						// present. This confirms platform identity but does
+						// NOT indicate data exposure: real W&B servers gate
+						// entity / project / run data at the resolver level
+						// behind the entity-name context (server returns
+						// null for the data-layer queries).
+						//
+						// Treat as info-only platform confirmation.
+						f.Auth = AuthInfoOnly
+						f.Severity = SevInfo
+						indicators["graphql_schema_reachable"] = true
 						f.Notes = append(f.Notes,
-							"GraphQL /graphql returns 200 for viewer query without auth — anonymous viewer record",
+							"GraphQL /graphql viewer query returns null (anonymous schema reachable) — data-layer queries still server-side-gated",
 						)
 					} else {
+						// 200 with a populated viewer = real credential bypass
+						// (server returns an authenticated identity to unauth
+						// callers). This is rare and CRITICAL.
 						f.Auth = AuthOpen
 						f.Severity = SevCritical
 						indicators["graphql_unauth_viewer_disclosed"] = true
