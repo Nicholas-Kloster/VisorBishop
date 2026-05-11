@@ -29,20 +29,32 @@ type ShadowPort struct {
 // RabbitMQ (5672), NATS (4222), Memcached (11211), Logstash (5044),
 // and MinIO API (9000). The NATS choice is grounded in the 2026-05-09
 // ParamWallet finding (open NATS JetStream ledger + AI pipeline).
+//
+// Iter-3 (2026-05-11) adds the AI-stack ML pipeline ports — MLflow UI
+// (5000), Streamlit (8501), Gradio (7860), Qdrant (6333), Milvus
+// (19530), and ChromaDB v1/v2 (8000). These ports are aligned with
+// the operator class we're surveying (people running AI observability
+// platforms are likely also running adjacent AI tooling on the same
+// hosts).
 var ShadowPorts = []ShadowPort{
 	{111, "rpcbind", ""},
 	{1080, "mailcatcher", "/"},
 	{2049, "nfs", ""},
 	{3306, "mysql", ""},
 	{4222, "nats", ""},
+	{5000, "mlflow", "/api/2.0/mlflow/experiments/list"},
 	{5044, "logstash", ""},
 	{5432, "postgresql", ""},
 	{5601, "kibana", "/api/status"},
 	{5672, "rabbitmq", ""},
+	{6333, "qdrant", "/collections"},
 	{6379, "redis", ""},
+	{7860, "gradio", "/config"},
+	{8000, "chromadb", "/api/v1/heartbeat"},
 	{8025, "mailhog", "/api/v2/messages?limit=0"},
 	{8086, "influxdb", "/ping"},
 	{8123, "clickhouse", "/ping"},
+	{8501, "streamlit", "/healthz"},
 	{9000, "minio_api", "/minio/health/live"},
 	{9090, "prometheus", "/api/v1/query?query=up"},
 	{9092, "kafka", ""},
@@ -50,6 +62,7 @@ var ShadowPorts = []ShadowPort{
 	{9100, "node_exporter", "/metrics"},
 	{9200, "elasticsearch", "/"},
 	{11211, "memcached", ""},
+	{19530, "milvus", ""},
 	{27017, "mongodb", ""},
 }
 
@@ -123,6 +136,8 @@ func scanOnePort(ctx context.Context, ip string, sp ShadowPort, timeout time.Dur
 		f.Notes = []string{"RabbitMQ AMQP port open; credentials unknown (no credential test)"}
 	} else if sp.Port == 5044 {
 		f.Notes = []string{"Logstash beats-input port open; no client cert/auth test"}
+	} else if sp.Port == 19530 {
+		f.Notes = []string{"Milvus vector DB gRPC port open; protocol probe omitted"}
 	}
 
 	return f
@@ -226,6 +241,54 @@ func httpCharacterize(ctx context.Context, ip string, sp ShadowPort, f ShadowFin
 				f.Confirmed = "MinIO API (anonymous ListBuckets allowed — CRITICAL)"
 				f.Notes = append(f.Notes, "CRITICAL: MinIO root returns bucket list without auth (anonymous ListBuckets policy)")
 			}
+		}
+	case "mlflow":
+		// MLflow tracking server. /api/2.0/mlflow/experiments/list returns
+		// {"experiments":[...]} when unauth. 401/403 if auth-fronted.
+		if r.Status == 200 && strings.Contains(body, `"experiments"`) {
+			f.Unauth = true
+			f.Confirmed = "MLflow Tracking Server (unauth — experiments list returned)"
+			f.Notes = append(f.Notes, "CRITICAL: MLflow API returns experiment list without authentication")
+		} else if r.Status == 401 || r.Status == 403 {
+			f.Confirmed = "MLflow (auth required)"
+		}
+	case "streamlit":
+		// Streamlit /healthz returns "ok" when healthy. Streamlit apps are
+		// "auth-by-app-code" — the framework itself has no auth. Marking the
+		// port as open is the find; whether the app behind it has auth is
+		// per-instance.
+		if r.Status == 200 {
+			f.Confirmed = "Streamlit app (framework has no built-in auth)"
+			f.Notes = append(f.Notes, "Streamlit framework provides no auth — exposure depends on app code")
+		}
+	case "gradio":
+		// Gradio /config returns JSON with version + UI config. Public Gradio
+		// apps are common; auth is opt-in via auth= parameter at app launch.
+		if r.Status == 200 && strings.Contains(body, `"version"`) {
+			f.Confirmed = "Gradio app"
+			// Look for auth_required field
+			if strings.Contains(body, `"auth_required":false`) || !strings.Contains(body, `"auth_required"`) {
+				f.Unauth = true
+				f.Confirmed = "Gradio app (no auth required)"
+			}
+		}
+	case "qdrant":
+		// Qdrant /collections returns {"result":{"collections":[...]}} when unauth.
+		// 401/403 if API key required.
+		if r.Status == 200 && strings.Contains(body, `"collections"`) {
+			f.Unauth = true
+			f.Confirmed = "Qdrant (unauth — collections list returned)"
+			f.Notes = append(f.Notes, "CRITICAL: Qdrant vector DB returns collection list without authentication")
+		} else if r.Status == 401 || r.Status == 403 {
+			f.Confirmed = "Qdrant (API key required)"
+		}
+	case "chromadb":
+		// ChromaDB /api/v1/heartbeat returns {"nanosecond heartbeat": ...}.
+		// ChromaDB has no auth by default in OSS; "tenant" feature added in v2.
+		if r.Status == 200 && (strings.Contains(body, "heartbeat") || strings.Contains(body, "nanosecond")) {
+			f.Unauth = true
+			f.Confirmed = "ChromaDB (unauth)"
+			f.Notes = append(f.Notes, "ChromaDB has no built-in auth in default OSS deployment")
 		}
 	}
 	return f
