@@ -49,9 +49,20 @@ func (p LangSmithProber) Probe(ctx context.Context, client *http.Client, target,
 	if err := json.Unmarshal(r.Body, &info); err != nil {
 		return f
 	}
-	// LangSmith info responses always have at least `version`. If missing,
-	// this isn't a LangSmith instance.
+	// LangSmith info responses always have `version`. But ZenML, MLflow, and
+	// other Python-FastAPI services also expose `/api/v1/info` with a
+	// `version` field. To disambiguate, we require at least ONE
+	// LangSmith-specific marker: license_expiration_time, customer_info, or
+	// instance_flags with a known LangSmith flag.
 	if info.Version == "" {
+		return f
+	}
+	hasLangSmithMarker := info.LicenseExpirationTime != "" ||
+		info.CustomerInfo != nil ||
+		(info.InstanceFlags != nil && (info.InstanceFlags["playground_auth_bypass_enabled"] != nil ||
+			info.InstanceFlags["self_hosted_jit_provisioning_enabled"] != nil ||
+			info.InstanceFlags["dataset_examples_multipart_enabled"] != nil))
+	if !hasLangSmithMarker {
 		return f
 	}
 

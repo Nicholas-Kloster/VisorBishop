@@ -23,7 +23,7 @@ import (
 	"github.com/Nicholas-Kloster/VisorBishop/internal/probe"
 )
 
-const Version = "0.1.4"
+const Version = "0.1.5"
 
 func main() {
 	var (
@@ -66,8 +66,11 @@ func main() {
 		fingerprint.LangSmithProber{},
 		fingerprint.LangfuseProber{},
 		fingerprint.HeliconeProber{},
+		fingerprint.LiteLLMProber{},
 		fingerprint.OpikProber{},
 		fingerprint.AgentOpsProber{},
+		fingerprint.ArgillaProber{},
+		fingerprint.PromptfooProber{},
 		fingerprint.OpenLITProber{},
 		fingerprint.LunaryProber{},
 		fingerprint.PezzoProber{},

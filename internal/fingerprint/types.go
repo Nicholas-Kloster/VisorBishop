@@ -23,6 +23,9 @@ const (
 	Pezzo        Platform = "pezzo"
 	OpikPlatform Platform = "comet-opik"
 	AgentOps     Platform = "agentops"
+	LiteLLM      Platform = "litellm"
+	Argilla      Platform = "argilla"
+	Promptfoo    Platform = "promptfoo"
 )
 
 // AllPlatforms returns the canonical list of platform identifiers that
@@ -31,6 +34,7 @@ func AllPlatforms() []Platform {
 	return []Platform{
 		PhoenixArize, Langfuse, Helicone, LangSmith,
 		Lunary, OpenLIT, Pezzo, OpikPlatform, AgentOps,
+		LiteLLM, Argilla, Promptfoo,
 	}
 }
 
