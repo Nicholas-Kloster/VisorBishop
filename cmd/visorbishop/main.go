@@ -169,11 +169,39 @@ func loadTargets(file, single string) ([]targetRef, error) {
 	return targets, scanner.Err()
 }
 
-// parseTargetLine accepts either "https://1.2.3.4:443" or
-// "https://1.2.3.4:443\thostname.example.com" (TSV format from prior probes).
+// parseTargetLine accepts several formats:
+//   "https://1.2.3.4:443"                           full URL
+//   "https://1.2.3.4:443\thostname.example.com"     URL + hostname (TSV)
+//   "1.2.3.4:443"                                   bare IP:port (scheme inferred: 443→https, else http)
+//   "1.2.3.4:443\thostname.example.com"             bare + hostname
 func parseTargetLine(line string) targetRef {
 	parts := strings.SplitN(line, "\t", 2)
-	t := targetRef{URL: parts[0]}
+	url := strings.TrimSpace(parts[0])
+	// If no scheme, infer from port
+	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		// Extract port (last colon)
+		port := "80"
+		if i := strings.LastIndex(url, ":"); i > 0 {
+			candidate := url[i+1:]
+			// Sanity-check it's numeric
+			allDigits := candidate != ""
+			for _, c := range candidate {
+				if c < '0' || c > '9' {
+					allDigits = false
+					break
+				}
+			}
+			if allDigits {
+				port = candidate
+			}
+		}
+		scheme := "http"
+		if port == "443" || port == "8443" || port == "9443" {
+			scheme = "https"
+		}
+		url = scheme + "://" + url
+	}
+	t := targetRef{URL: url}
 	if len(parts) > 1 {
 		t.Hostname = strings.TrimSpace(parts[1])
 	}
