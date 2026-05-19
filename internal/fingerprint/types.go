@@ -37,6 +37,8 @@ const (
 	PostHog  Platform = "posthog"
 	Prefect  Platform = "prefect"
 	Airflow  Platform = "airflow"
+	// iter-9 expansion: LLM frontend + gateway tier (G5)
+	OpenWebUI Platform = "open-webui"
 )
 
 // AllPlatforms returns the canonical list of platform identifiers that
@@ -48,6 +50,7 @@ func AllPlatforms() []Platform {
 		LiteLLM, Argilla, Promptfoo,
 		MLflow, Wandb, Comet,
 		Langflow, Dify, Kubeflow, PostHog, Prefect, Airflow,
+		OpenWebUI,
 	}
 }
 
@@ -55,11 +58,13 @@ func AllPlatforms() []Platform {
 type AuthState string
 
 const (
-	AuthUnknown     AuthState = "unknown"     // probe failed / inconclusive
-	AuthOpen        AuthState = "unauth"      // primary API reachable without auth — CRITICAL
-	AuthProtected   AuthState = "auth"        // returned 401/403 on protected route
-	AuthInfoOnly    AuthState = "info-leak"   // platform has unauth-readable info endpoint but data is protected
-	AuthMixed       AuthState = "mixed"       // some routes auth, some not
+	AuthUnknown     AuthState = "unknown"      // probe failed / inconclusive
+	AuthOpen        AuthState = "unauth"       // primary API reachable without auth — CRITICAL
+	AuthProtected   AuthState = "auth"         // returned 401/403 on protected route
+	AuthInfoOnly    AuthState = "info-leak"    // platform has unauth-readable info endpoint but data is protected
+	AuthMixed       AuthState = "mixed"        // some routes auth, some not
+	AuthSignupOpen  AuthState = "signup-open"  // auth enabled but open self-registration — account-takeover risk
+	AuthPublicAPI   AuthState = "public-api"   // public spec/provider endpoint exposed (no data, but leaks config)
 )
 
 // Severity is the standardized severity bucket assigned by the fingerprint.

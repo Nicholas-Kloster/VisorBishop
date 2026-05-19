@@ -62,11 +62,12 @@ func main() {
 	}
 
 	probers := []fingerprint.Prober{
+		fingerprint.OpenWebUIProber{},
+		fingerprint.LiteLLMProber{},
 		fingerprint.PhoenixProber{},
 		fingerprint.LangSmithProber{},
 		fingerprint.LangfuseProber{},
 		fingerprint.HeliconeProber{},
-		fingerprint.LiteLLMProber{},
 		fingerprint.OpikProber{},
 		fingerprint.AgentOpsProber{},
 		fingerprint.ArgillaProber{},

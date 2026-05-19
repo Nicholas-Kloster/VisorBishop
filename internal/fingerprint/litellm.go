@@ -25,6 +25,7 @@ type LiteLLMProber struct{}
 func (p LiteLLMProber) ID() Platform { return LiteLLM }
 
 func (p LiteLLMProber) Probe(ctx context.Context, client *http.Client, target, hostname string) Finding {
+	base := trimTarget(target) // prevents double-slash when target has trailing /
 	f := Finding{
 		Target:   target,
 		Hostname: hostname,
@@ -34,7 +35,7 @@ func (p LiteLLMProber) Probe(ctx context.Context, client *http.Client, target, h
 	}
 
 	// Step 1: confirm LiteLLM via the Swagger root or models endpoint
-	r := probe.Get(ctx, client, target+"/v1/models", hostname, 8192)
+	r := probe.Get(ctx, client, base+"/v1/models", hostname, 8192)
 	f.LatencyMS = r.LatencyMS
 	if r.Err != nil {
 		return f
@@ -43,23 +44,60 @@ func (p LiteLLMProber) Probe(ctx context.Context, client *http.Client, target, h
 	indicators := map[string]interface{}{}
 
 	// LiteLLM-specific markers we need before flagging confirmed:
-	//   * Root HTML contains "LiteLLM API" in the title (Swagger UI)
+	//   * /openapi.json info.title == "LiteLLM API"  (most reliable — spec-mandated string)
+	//   * Root HTML contains "LiteLLM API" in the title (Swagger UI fallback)
+	//   * /health/readiness JSON has litellm_version field
 	//   * /.well-known/litellm-ui-config returns proxy_base_url JSON
 	// /v1/models matching alone is too loose — every OpenAI-compatible
 	// proxy serves the same shape (vLLM, Ollama proxy, OpenRouter, etc.).
 	litellmConfirmed := false
-	ru := probe.Get(ctx, client, target+"/", hostname, 4096)
-	if ru.Status == 200 && strings.Contains(string(ru.Body), "LiteLLM API") {
+
+	// Primary: /openapi.json title (anchors on spec-mandated string, not HTML)
+	roapi := probe.Get(ctx, client, base+"/openapi.json", hostname, 4096)
+	if roapi.Status == 200 && strings.Contains(string(roapi.Body), `"LiteLLM API"`) {
 		litellmConfirmed = true
+		// Extract version from openapi info.version while we have the body.
+		body := string(roapi.Body)
+		if i := strings.Index(body, `"version":"`); i > 0 {
+			rest := body[i+11:]
+			if j := strings.Index(rest, `"`); j > 0 {
+				f.Version = rest[:j]
+			}
+		}
 	}
+
+	// Fallback: /health/readiness litellm_version field
 	if !litellmConfirmed {
-		// Try the well-known config endpoint
-		ruc := probe.Get(ctx, client, target+"/.well-known/litellm-ui-config", hostname, 512)
+		rhr := probe.Get(ctx, client, base+"/health/readiness", hostname, 1024)
+		if rhr.Status == 200 && strings.Contains(string(rhr.Body), "litellm_version") {
+			litellmConfirmed = true
+			body := string(rhr.Body)
+			if i := strings.Index(body, `"litellm_version":"`); i >= 0 {
+				rest := body[i+19:]
+				if j := strings.Index(rest, `"`); j > 0 {
+					f.Version = rest[:j]
+				}
+			}
+		}
+	}
+
+	// Fallback: root HTML Swagger title
+	if !litellmConfirmed {
+		ru := probe.Get(ctx, client, base+"/", hostname, 4096)
+		if ru.Status == 200 && strings.Contains(string(ru.Body), "LiteLLM API") {
+			litellmConfirmed = true
+		}
+	}
+
+	// Fallback: well-known config endpoint
+	if !litellmConfirmed {
+		ruc := probe.Get(ctx, client, base+"/.well-known/litellm-ui-config", hostname, 512)
 		if ruc.Status == 200 && strings.Contains(string(ruc.Body), "proxy_base_url") {
 			litellmConfirmed = true
 			indicators["litellm_ui_config_exposed"] = true
 		}
 	}
+
 	if !litellmConfirmed {
 		return f
 	}
@@ -102,16 +140,25 @@ func (p LiteLLMProber) Probe(ctx context.Context, client *http.Client, target, h
 		f.Severity = SevInfo
 	}
 
-	// Pull OpenAPI version regardless of auth state
-	rv := probe.Get(ctx, client, target+"/openapi.json", hostname, 4096)
-	if rv.Status == 200 {
-		body := string(rv.Body)
-		if i := strings.Index(body, `"version":"`); i > 0 {
-			rest := body[i+11:]
-			if j := strings.Index(rest, `"`); j > 0 {
-				f.Version = rest[:j]
-			}
+	// /public/providers — unauth provider list. Present in LiteLLM ≥1.x; a 200
+	// response leaks the full provider roster (anthropic, openai, bedrock, etc.)
+	// without auth. Not a credential leak but discloses the proxy's backend config.
+	// Severity: HIGH when auth is otherwise intact; CRITICAL when stacked on AuthOpen.
+	rpp := probe.Get(ctx, client, base+"/public/providers", hostname, 16384)
+	if rpp.Status == 200 && len(rpp.Body) > 2 {
+		indicators["public_providers_exposed"] = true
+		// Count entries — the body is a JSON array of provider-name strings.
+		providerCount := strings.Count(string(rpp.Body), `"`)
+		if providerCount > 0 {
+			indicators["provider_count_approx"] = providerCount / 2 // each name = 2 quotes
 		}
+		if f.Auth == AuthProtected || f.Auth == AuthUnknown {
+			// Auth is otherwise intact; bump to info-leak tier.
+			f.Auth = AuthPublicAPI
+			f.Severity = SevHigh
+			f.Notes = append(f.Notes, "HIGH: /public/providers returns full provider list without authentication (backend config disclosure)")
+		}
+		// If already AuthOpen/SevCritical, don't downgrade — just record the indicator.
 	}
 
 	if f.Confirmed && len(indicators) > 0 {
